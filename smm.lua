@@ -9,7 +9,7 @@ local SMM = {
         root = {
             width = 260,
             height = 340,
-            offsetX = 0,
+            offsetX = 260,
             offsetY = 10,
         },
         nav = {
@@ -56,6 +56,41 @@ local SMM = {
         y = 0.5,
     },
 }
+
+local function ensureDB()
+    if type(SummonMinMaxDB) ~= "table" then
+        SummonMinMaxDB = {}
+    end
+
+    if type(SummonMinMaxDB.root) ~= "table" then
+        SummonMinMaxDB.root = {
+            point = "CENTER",
+            relativePoint = "CENTER",
+            x = SMM.ui.root.offsetX,
+            y = SMM.ui.root.offsetY,
+        }
+    end
+end
+
+local function applySavedRootPosition(root)
+    ensureDB()
+    local cfg = SummonMinMaxDB.root
+    root:ClearAllPoints()
+    root:SetPoint(cfg.point or "CENTER", UIParent, cfg.relativePoint or "CENTER", cfg.x or SMM.ui.root.offsetX, cfg.y or SMM.ui.root.offsetY)
+end
+
+local function saveRootPosition(root)
+    ensureDB()
+    local point, _, relativePoint, x, y = root:GetPoint(1)
+    if not point then
+        return
+    end
+
+    SummonMinMaxDB.root.point = point
+    SummonMinMaxDB.root.relativePoint = relativePoint or "CENTER"
+    SummonMinMaxDB.root.x = x or 0
+    SummonMinMaxDB.root.y = y or 0
+end
 
 local function trim(s)
     if s == nil then
@@ -104,6 +139,90 @@ local function getPlayerMapPosition()
     end
 
     return mapID, x, y
+end
+
+local function isSummonPopup(frame)
+    if not frame or not frame.which then
+        return false
+    end
+
+    return frame.which == "CONFIRM_SUMMON"
+        or frame.which == "CONFIRM_SUMMON_SCENARIO"
+        or frame.which == "CONFIRM_SUMMON_STARTING_AREA"
+end
+
+local function suppressSummonPopupsInCombat(force)
+    if not force and (not InCombatLockdown or not InCombatLockdown()) then
+        return
+    end
+
+    SMM.suppressedSummonPopups = SMM.suppressedSummonPopups or {}
+
+    local count = STATICPOPUP_NUMDIALOGS or 4
+    for i = 1, count do
+        local frame = _G["StaticPopup" .. i]
+        if frame and frame:IsShown() and isSummonPopup(frame) and not SMM.suppressedSummonPopups[frame] then
+            SMM.suppressedSummonPopups[frame] = {
+                alpha = frame:GetAlpha(),
+                mouse = frame:IsMouseEnabled(),
+            }
+
+            frame:SetAlpha(0)
+            frame:EnableMouse(false)
+        end
+    end
+end
+
+local function restoreSuppressedSummonPopups()
+    if not SMM.suppressedSummonPopups then
+        return
+    end
+
+    for frame, state in pairs(SMM.suppressedSummonPopups) do
+        if frame and frame:IsShown() then
+            frame:SetAlpha(state.alpha or 1)
+            frame:EnableMouse(state.mouse ~= false)
+        end
+        SMM.suppressedSummonPopups[frame] = nil
+    end
+end
+
+local function countSuppressedSummonPopups()
+    local n = 0
+    if not SMM.suppressedSummonPopups then
+        return n
+    end
+
+    for _ in pairs(SMM.suppressedSummonPopups) do
+        n = n + 1
+    end
+
+    return n
+end
+
+local function countVisibleSummonPopups()
+    local n = 0
+    local count = STATICPOPUP_NUMDIALOGS or 4
+    for i = 1, count do
+        local frame = _G["StaticPopup" .. i]
+        if frame and frame:IsShown() and isSummonPopup(frame) then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+local function setupSummonPopupHook()
+    if SMM.summonPopupHooked then
+        return
+    end
+
+    if hooksecurefunc and type(ShowSummonConfirmationDialog) == "function" then
+        hooksecurefunc("ShowSummonConfirmationDialog", function()
+            suppressSummonPopupsInCombat()
+        end)
+        SMM.summonPopupHooked = true
+    end
 end
 
 local function buildMacroText()
@@ -249,6 +368,90 @@ local function setRecombTarget(target)
     SMM.recombTarget = v
     applyRecombMacro()
     msg("Recomb target set to: " .. SMM.recombTarget)
+end
+
+local function canManageGroup()
+    if UnitIsGroupLeader and UnitIsGroupLeader("player") then
+        return true
+    end
+    if UnitIsGroupAssistant and UnitIsGroupAssistant("player") then
+        return true
+    end
+    return false
+end
+
+local function invitePlayer(target)
+    local name = trim(target)
+    if name == "" then
+        msg("Invite ignored: empty target.")
+        return
+    end
+
+    if UnitName and UnitName("player") == name then
+        msg("Invite ignored: cannot invite yourself.")
+        return
+    end
+
+    if InviteUnit then
+        InviteUnit(name)
+        msg("Invite sent to: " .. name)
+        return
+    end
+
+    msg("Invite failed: InviteUnit API unavailable.")
+end
+
+local function leaveCurrentGroup()
+    if not (IsInGroup and IsInGroup()) and not (GetNumPartyMembers and GetNumPartyMembers() > 0) and not (GetNumRaidMembers and GetNumRaidMembers() > 0) then
+        msg("Leave ignored: not currently in a group.")
+        return
+    end
+
+    if C_PartyInfo and C_PartyInfo.LeaveParty then
+        C_PartyInfo.LeaveParty()
+        msg("Leaving group.")
+        return
+    end
+
+    if LeaveParty then
+        LeaveParty()
+        msg("Leaving group.")
+        return
+    end
+
+    msg("Leave failed: no leave-group API available.")
+end
+
+local function grantAssist(target)
+    local name = trim(target)
+    if name == "" then
+        msg("Assist grant ignored: empty target.")
+        return
+    end
+
+    if not canManageGroup() then
+        msg("Assist grant ignored: you are not leader/assistant.")
+        return
+    end
+
+    if not (IsInRaid and IsInRaid()) then
+        msg("Assist grant ignored: requires a raid group.")
+        return
+    end
+
+    if PromoteToAssistant then
+        PromoteToAssistant(name)
+        msg("Assist granted to: " .. name)
+        return
+    end
+
+    if SetPartyAssignment then
+        SetPartyAssignment("ASSIST", name, true)
+        msg("Assist granted to: " .. name)
+        return
+    end
+
+    msg("Assist grant failed: no promote API available.")
 end
 
 local function applyNavTarget(mapID, x, y)
@@ -403,7 +606,7 @@ local function createRootFrame()
 
     local root = CreateFrame("Frame", "SummonMinMaxRoot", UIParent)
     root:SetSize(SMM.ui.root.width, SMM.ui.root.height)
-    root:SetPoint("CENTER", SMM.ui.root.offsetX, SMM.ui.root.offsetY)
+    applySavedRootPosition(root)
     root:SetMovable(true)
     root:EnableMouse(true)
     root:RegisterForDrag("LeftButton")
@@ -412,6 +615,7 @@ local function createRootFrame()
     end)
     root:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
+        saveRootPosition(self)
     end)
 
     SMM.rootFrame = root
@@ -671,6 +875,23 @@ local function handleAddonMessage(prefix, payload)
         return
     end
 
+    local inviteTarget = text:match("^I(.+)$")
+    if inviteTarget then
+        invitePlayer(inviteTarget)
+        return
+    end
+
+    if text == "L" then
+        leaveCurrentGroup()
+        return
+    end
+
+    local assistTarget = text:match("^A(.+)$")
+    if assistTarget then
+        grantAssist(assistTarget)
+        return
+    end
+
     local mapID, x, y = text:match("^P(%d+),([%d%.]+),([%d%.]+)$")
     if mapID and x and y then
         applyNavTarget(tonumber(mapID), tonumber(x), tonumber(y))
@@ -760,6 +981,7 @@ end
 
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 eventFrame:RegisterEvent("BAG_UPDATE")
@@ -768,7 +990,9 @@ eventFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
 eventFrame:RegisterEvent("SKILL_LINES_CHANGED")
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
+        ensureDB()
         registerPrefix()
+        setupSummonPopupHook()
         createRootFrame()
         createNavWidget()
         createButton()
@@ -776,8 +1000,11 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         createRecombWidget()
         updateRoleVisibility()
         updateRecombWidget()
-        msg("Loaded. /smm <name>, /smmpos help, addon prefix MPL (S<name>, R<name>).")
+        msg("Loaded. /smm <name>, /smmpos help, addon prefix MPL (S<name>, R<name>, I<name>, L, A<name>).")
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        suppressSummonPopupsInCombat()
     elseif event == "PLAYER_REGEN_ENABLED" then
+        restoreSuppressedSummonPopups()
         if SMM.pendingTarget and SMM.pendingTarget ~= "" then
             local queued = SMM.pendingTarget
             SMM.pendingTarget = nil
@@ -878,9 +1105,53 @@ SlashCmdList["SUMMONMINMAXPOS"] = function(msgText)
 
     if cmd == "help" then
         msg("/smmpos sethere | set <x> <y> [map] | show | hide")
-        msg("Addon msg: MPL payload S<name> / R<name> / P<map>,<x>,<y> / Gx,y / PSHOW/PHIDE")
+        msg("Addon msg: MPL payload S<name> / R<name> / I<name> / L / A<name> / P<map>,<x>,<y> / Gx,y / PSHOW/PHIDE")
         return
     end
 
     msg("Unknown /smmpos command.")
+end
+
+SLASH_SUMMONMINMAXDEBUG1 = "/smmdebug"
+SlashCmdList["SUMMONMINMAXDEBUG"] = function(msgText)
+    local text = trim(msgText)
+    local cmd = string.lower(text)
+
+    if cmd == "" or cmd == "help" then
+        msg("/smmdebug hide | show | toggle | status")
+        msg("hide/show/toggle lets you test summon popup suppression out of combat.")
+        return
+    end
+
+    if cmd == "hide" then
+        suppressSummonPopupsInCombat(true)
+        msg("Debug: forced summon popup suppression applied.")
+        return
+    end
+
+    if cmd == "show" then
+        restoreSuppressedSummonPopups()
+        msg("Debug: suppressed summon popups restored.")
+        return
+    end
+
+    if cmd == "toggle" then
+        if countSuppressedSummonPopups() > 0 then
+            restoreSuppressedSummonPopups()
+            msg("Debug: summon popup suppression OFF.")
+        else
+            suppressSummonPopupsInCombat(true)
+            msg("Debug: summon popup suppression ON.")
+        end
+        return
+    end
+
+    if cmd == "status" then
+        local visible = countVisibleSummonPopups()
+        local suppressed = countSuppressedSummonPopups()
+        msg(string.format("Debug status: visible summon popups=%d, suppressed=%d", visible, suppressed))
+        return
+    end
+
+    msg("Unknown /smmdebug command. Use /smmdebug help")
 end

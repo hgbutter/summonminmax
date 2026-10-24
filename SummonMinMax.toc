@@ -3,5 +3,6 @@
 ## Notes: Efficient summon process by multiple warlocks in a coordinated process.
 ## Version: 1.0
 ## Author: Hgbutter
+## SavedVariables: SummonMinMaxDB
 
 smm.lua
