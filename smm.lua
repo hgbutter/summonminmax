@@ -5,6 +5,50 @@ local SMM = {
     pendingRecombTarget = nil,
     prefix = "MPL",
     recombItemID = 4381,
+    ui = {
+        root = {
+            width = 260,
+            height = 340,
+            offsetX = 0,
+            offsetY = 10,
+        },
+        nav = {
+            frameWidth = 220,
+            frameHeight = 240,
+            plotSize = 170,
+            maxPixel = 72,
+            worldScale = 32,
+            transform = {
+                swapXY = true,
+                mirrorX = true,
+                mirrorY = true,
+            },
+            bgColor = { 0.06, 0.06, 0.08, 0.9 },
+            borderColor = { 0.8, 0.8, 0.8, 0.8 },
+            axisColor = { 0.3, 0.3, 0.35, 1 },
+            targetColor = { 1, 0.2, 0.2 },
+            dotSize = 16,
+            arrowSize = 28,
+        },
+        buttons = {
+            holderSize = 76,
+            borderSize = 8,
+            buttonSize = 56,
+            iconCrop = 0.05,
+            rowOffsetY = -10,
+            summonOffsetX = -44,
+            rowGap = 12,
+            summonBorderColor = { 0.9, 0.85, 0.45, 0.95 },
+            recombBorderColor = { 0.45, 0.9, 0.9, 0.95 },
+        },
+        recombStatus = {
+            size = 28,
+            borderSize = 1,
+            borderColor = { 0.8, 0.8, 0.8, 0.9 },
+            equippedColor = { 0.1, 0.85, 0.2, 0.95 },
+            bagColor = { 0.95, 0.85, 0.1, 0.95 },
+        },
+    },
     nav = {
         enabled = true,
         mapID = nil,
@@ -26,38 +70,36 @@ local function msg(text)
     end
 end
 
-local function clamp(v, lo, hi)
-    if v < lo then
-        return lo
-    end
-    if v > hi then
-        return hi
-    end
-    return v
-end
-
 local function nonLinearOffset(v, scale)
     local t = v / scale
-    return t / (1 + math.abs(t) ^ 1.6)
+    return t / (1 + math.abs(t))
+end
+
+local function transformNavAxes(nx, ny)
+    local tx = nx
+    local ty = ny
+    local transform = SMM.ui.nav.transform
+
+    if transform.swapXY then
+        tx, ty = ty, tx
+    end
+    if transform.mirrorX then
+        tx = -tx
+    end
+    if transform.mirrorY then
+        ty = -ty
+    end
+
+    return tx, ty
 end
 
 local function getPlayerMapPosition()
-    if not C_Map or not C_Map.GetBestMapForUnit or not C_Map.GetPlayerMapPosition then
+    if not UnitPosition then
         return nil
     end
 
-    local mapID = C_Map.GetBestMapForUnit("player")
-    if not mapID then
-        return nil
-    end
-
-    local pos = C_Map.GetPlayerMapPosition(mapID, "player")
-    if not pos then
-        return nil
-    end
-
-    local x, y = pos:GetXY()
-    if not x or not y then
+    local x, y, _, mapID = UnitPosition("player")
+    if not x or not y or mapID == nil then
         return nil
     end
 
@@ -211,8 +253,8 @@ end
 
 local function applyNavTarget(mapID, x, y)
     SMM.nav.mapID = mapID
-    SMM.nav.x = clamp(x, 0, 1)
-    SMM.nav.y = clamp(y, 0, 1)
+    SMM.nav.x = x
+    SMM.nav.y = y
     msg(string.format("Nav target set: map %d @ %.3f, %.3f", SMM.nav.mapID, SMM.nav.x, SMM.nav.y))
 end
 
@@ -231,22 +273,22 @@ local function parsePackedCoord(raw)
         return nil
     end
 
-    local asNumber = tonumber(text)
-    if not asNumber then
-        return nil
+    return tonumber(text)
+end
+
+local function getGlobalMapID()
+    if UnitPosition then
+        local _, _, _, mapID = UnitPosition("player")
+        if mapID == 0 or mapID == 1 then
+            return mapID
+        end
     end
 
-    if string.find(text, "%.", 1, true) then
-        return asNumber
+    if SMM.nav and (SMM.nav.mapID == 0 or SMM.nav.mapID == 1) then
+        return SMM.nav.mapID
     end
 
-    local digits = string.len(text)
-    if digits <= 0 then
-        return nil
-    end
-
-    local scale = 10 ^ digits
-    return asNumber / scale
+    return 0
 end
 
 local function getItemIDFromLink(link)
@@ -319,7 +361,7 @@ local function updateRecombWidget()
         if SMM.recombWidget then
             SMM.recombWidget:Show()
         end
-        SMM.recombWidgetColor:SetColorTexture(0.1, 0.85, 0.2, 0.95)
+        SMM.recombWidgetColor:SetColorTexture(unpack(SMM.ui.recombStatus.equippedColor))
         return
     end
 
@@ -327,7 +369,7 @@ local function updateRecombWidget()
         if SMM.recombWidget then
             SMM.recombWidget:Show()
         end
-        SMM.recombWidgetColor:SetColorTexture(0.95, 0.85, 0.1, 0.95)
+        SMM.recombWidgetColor:SetColorTexture(unpack(SMM.ui.recombStatus.bagColor))
         return
     end
 
@@ -360,8 +402,8 @@ local function createRootFrame()
     end
 
     local root = CreateFrame("Frame", "SummonMinMaxRoot", UIParent)
-    root:SetSize(260, 340)
-    root:SetPoint("CENTER", 0, 10)
+    root:SetSize(SMM.ui.root.width, SMM.ui.root.height)
+    root:SetPoint("CENTER", SMM.ui.root.offsetX, SMM.ui.root.offsetY)
     root:SetMovable(true)
     root:EnableMouse(true)
     root:RegisterForDrag("LeftButton")
@@ -381,32 +423,32 @@ local function createRecombWidget()
     end
 
     local frame = CreateFrame("Frame", "SummonMinMaxRecombWidget", SMM.rootFrame)
-    frame:SetSize(28, 28)
+    frame:SetSize(SMM.ui.recombStatus.size, SMM.ui.recombStatus.size)
     frame:SetPoint("TOPLEFT", SMM.navFrame, "TOPRIGHT", 10, -2)
 
     local borderTop = frame:CreateTexture(nil, "ARTWORK")
-    borderTop:SetColorTexture(0.8, 0.8, 0.8, 0.9)
+    borderTop:SetColorTexture(unpack(SMM.ui.recombStatus.borderColor))
     borderTop:SetPoint("TOPLEFT", 0, 0)
     borderTop:SetPoint("TOPRIGHT", 0, 0)
-    borderTop:SetHeight(1)
+    borderTop:SetHeight(SMM.ui.recombStatus.borderSize)
 
     local borderBottom = frame:CreateTexture(nil, "ARTWORK")
-    borderBottom:SetColorTexture(0.8, 0.8, 0.8, 0.9)
+    borderBottom:SetColorTexture(unpack(SMM.ui.recombStatus.borderColor))
     borderBottom:SetPoint("BOTTOMLEFT", 0, 0)
     borderBottom:SetPoint("BOTTOMRIGHT", 0, 0)
-    borderBottom:SetHeight(1)
+    borderBottom:SetHeight(SMM.ui.recombStatus.borderSize)
 
     local borderLeft = frame:CreateTexture(nil, "ARTWORK")
-    borderLeft:SetColorTexture(0.8, 0.8, 0.8, 0.9)
+    borderLeft:SetColorTexture(unpack(SMM.ui.recombStatus.borderColor))
     borderLeft:SetPoint("TOPLEFT", 0, 0)
     borderLeft:SetPoint("BOTTOMLEFT", 0, 0)
-    borderLeft:SetWidth(1)
+    borderLeft:SetWidth(SMM.ui.recombStatus.borderSize)
 
     local borderRight = frame:CreateTexture(nil, "ARTWORK")
-    borderRight:SetColorTexture(0.8, 0.8, 0.8, 0.9)
+    borderRight:SetColorTexture(unpack(SMM.ui.recombStatus.borderColor))
     borderRight:SetPoint("TOPRIGHT", 0, 0)
     borderRight:SetPoint("BOTTOMRIGHT", 0, 0)
-    borderRight:SetWidth(1)
+    borderRight:SetWidth(SMM.ui.recombStatus.borderSize)
 
     local color = frame:CreateTexture(nil, "BACKGROUND")
     color:SetPoint("TOPLEFT", 1, -1)
@@ -423,35 +465,35 @@ local function createRecombButton()
     end
 
     local holder = CreateFrame("Frame", "SummonMinMaxRecombButtonHolder", SMM.rootFrame)
-    holder:SetSize(76, 76)
-    holder:SetPoint("LEFT", SMM.buttonHolder, "RIGHT", 12, 0)
+    holder:SetSize(SMM.ui.buttons.holderSize, SMM.ui.buttons.holderSize)
+    holder:SetPoint("LEFT", SMM.buttonHolder, "RIGHT", SMM.ui.buttons.rowGap, 0)
 
     local borderTop = holder:CreateTexture(nil, "ARTWORK")
-    borderTop:SetColorTexture(0.45, 0.9, 0.9, 0.95)
+    borderTop:SetColorTexture(unpack(SMM.ui.buttons.recombBorderColor))
     borderTop:SetPoint("TOPLEFT", 0, 0)
     borderTop:SetPoint("TOPRIGHT", 0, 0)
-    borderTop:SetHeight(8)
+    borderTop:SetHeight(SMM.ui.buttons.borderSize)
 
     local borderBottom = holder:CreateTexture(nil, "ARTWORK")
-    borderBottom:SetColorTexture(0.45, 0.9, 0.9, 0.95)
+    borderBottom:SetColorTexture(unpack(SMM.ui.buttons.recombBorderColor))
     borderBottom:SetPoint("BOTTOMLEFT", 0, 0)
     borderBottom:SetPoint("BOTTOMRIGHT", 0, 0)
-    borderBottom:SetHeight(8)
+    borderBottom:SetHeight(SMM.ui.buttons.borderSize)
 
     local borderLeft = holder:CreateTexture(nil, "ARTWORK")
-    borderLeft:SetColorTexture(0.45, 0.9, 0.9, 0.95)
+    borderLeft:SetColorTexture(unpack(SMM.ui.buttons.recombBorderColor))
     borderLeft:SetPoint("TOPLEFT", 0, 0)
     borderLeft:SetPoint("BOTTOMLEFT", 0, 0)
-    borderLeft:SetWidth(8)
+    borderLeft:SetWidth(SMM.ui.buttons.borderSize)
 
     local borderRight = holder:CreateTexture(nil, "ARTWORK")
-    borderRight:SetColorTexture(0.45, 0.9, 0.9, 0.95)
+    borderRight:SetColorTexture(unpack(SMM.ui.buttons.recombBorderColor))
     borderRight:SetPoint("TOPRIGHT", 0, 0)
     borderRight:SetPoint("BOTTOMRIGHT", 0, 0)
-    borderRight:SetWidth(8)
+    borderRight:SetWidth(SMM.ui.buttons.borderSize)
 
     local button = CreateFrame("Button", "SummonMinMaxRecombButton", holder, "UIPanelButtonTemplate,SecureActionButtonTemplate")
-    button:SetSize(56, 56)
+    button:SetSize(SMM.ui.buttons.buttonSize, SMM.ui.buttons.buttonSize)
     button:SetPoint("CENTER", holder, "CENTER", 0, 0)
     button:RegisterForClicks("AnyUp", "AnyDown")
     button:EnableMouse(true)
@@ -459,7 +501,7 @@ local function createRecombButton()
 
     local icon = button:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints(button)
-    icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
+    icon:SetTexCoord(SMM.ui.buttons.iconCrop, 1 - SMM.ui.buttons.iconCrop, SMM.ui.buttons.iconCrop, 1 - SMM.ui.buttons.iconCrop)
 
     SMM.recombButtonHolder = holder
     SMM.recombButton = button
@@ -496,12 +538,14 @@ local function updateNavWidget(elapsed)
     local dx = x - SMM.nav.x
     local dy = y - SMM.nav.y
 
-    local nx = nonLinearOffset(dx, 0.018)
-    local ny = nonLinearOffset(dy, 0.018)
+    local worldScale = SMM.ui.nav.worldScale
+    local nx = nonLinearOffset(dx, worldScale)
+    local ny = nonLinearOffset(dy, worldScale)
+    local tx, ty = transformNavAxes(nx, ny)
 
-    local maxPixel = 72
-    local px = nx * maxPixel
-    local py = -ny * maxPixel
+    local maxPixel = SMM.ui.nav.maxPixel
+    local px = tx * maxPixel
+    local py = -ty * maxPixel
 
     SMM.navDot:ClearAllPoints()
     SMM.navDot:SetPoint("CENTER", SMM.navPlot, "CENTER", px, py)
@@ -519,7 +563,7 @@ local function createNavWidget()
     end
 
     local frame = CreateFrame("Frame", "SummonMinMaxNavWidget", SMM.rootFrame)
-    frame:SetSize(220, 240)
+    frame:SetSize(SMM.ui.nav.frameWidth, SMM.ui.nav.frameHeight)
     frame:SetPoint("TOP", SMM.rootFrame, "TOP", 0, -6)
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -527,45 +571,45 @@ local function createNavWidget()
     title:SetText("B737-800")
 
     local plot = CreateFrame("Frame", nil, frame)
-    plot:SetSize(170, 170)
+    plot:SetSize(SMM.ui.nav.plotSize, SMM.ui.nav.plotSize)
     plot:SetPoint("TOP", 0, -24)
 
     local bg = plot:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
-    bg:SetColorTexture(0.06, 0.06, 0.08, 0.9)
+    bg:SetColorTexture(unpack(SMM.ui.nav.bgColor))
 
     local borderTop = plot:CreateTexture(nil, "ARTWORK")
-    borderTop:SetColorTexture(0.8, 0.8, 0.8, 0.8)
+    borderTop:SetColorTexture(unpack(SMM.ui.nav.borderColor))
     borderTop:SetPoint("TOPLEFT", 0, 0)
     borderTop:SetPoint("TOPRIGHT", 0, 0)
     borderTop:SetHeight(1)
 
     local borderBottom = plot:CreateTexture(nil, "ARTWORK")
-    borderBottom:SetColorTexture(0.8, 0.8, 0.8, 0.8)
+    borderBottom:SetColorTexture(unpack(SMM.ui.nav.borderColor))
     borderBottom:SetPoint("BOTTOMLEFT", 0, 0)
     borderBottom:SetPoint("BOTTOMRIGHT", 0, 0)
     borderBottom:SetHeight(1)
 
     local borderLeft = plot:CreateTexture(nil, "ARTWORK")
-    borderLeft:SetColorTexture(0.8, 0.8, 0.8, 0.8)
+    borderLeft:SetColorTexture(unpack(SMM.ui.nav.borderColor))
     borderLeft:SetPoint("TOPLEFT", 0, 0)
     borderLeft:SetPoint("BOTTOMLEFT", 0, 0)
     borderLeft:SetWidth(1)
 
     local borderRight = plot:CreateTexture(nil, "ARTWORK")
-    borderRight:SetColorTexture(0.8, 0.8, 0.8, 0.8)
+    borderRight:SetColorTexture(unpack(SMM.ui.nav.borderColor))
     borderRight:SetPoint("TOPRIGHT", 0, 0)
     borderRight:SetPoint("BOTTOMRIGHT", 0, 0)
     borderRight:SetWidth(1)
 
     local axisV = plot:CreateTexture(nil, "ARTWORK")
-    axisV:SetColorTexture(0.3, 0.3, 0.35, 1)
+    axisV:SetColorTexture(unpack(SMM.ui.nav.axisColor))
     axisV:SetPoint("TOP", 0, 0)
     axisV:SetPoint("BOTTOM", 0, 0)
     axisV:SetWidth(1)
 
     local axisH = plot:CreateTexture(nil, "ARTWORK")
-    axisH:SetColorTexture(0.3, 0.3, 0.35, 1)
+    axisH:SetColorTexture(unpack(SMM.ui.nav.axisColor))
     axisH:SetPoint("LEFT", 0, 0)
     axisH:SetPoint("RIGHT", 0, 0)
     axisH:SetHeight(1)
@@ -573,15 +617,15 @@ local function createNavWidget()
     local targetX = plot:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     targetX:SetPoint("CENTER", 0, 0)
     targetX:SetText("X")
-    targetX:SetTextColor(1, 0.2, 0.2)
+    targetX:SetTextColor(unpack(SMM.ui.nav.targetColor))
 
     local dot = CreateFrame("Frame", nil, plot)
-    dot:SetSize(16, 16)
+    dot:SetSize(SMM.ui.nav.dotSize, SMM.ui.nav.dotSize)
     dot:SetPoint("CENTER", 0, 0)
 
     local arrow = dot:CreateTexture(nil, "BACKGROUND")
     arrow:SetTexture("Interface\\Minimap\\MinimapArrow")
-    arrow:SetSize(28, 28)
+    arrow:SetSize(SMM.ui.nav.arrowSize, SMM.ui.nav.arrowSize)
     arrow:SetPoint("CENTER", 0, 0)
 
     SMM.navFrame = frame
@@ -638,17 +682,12 @@ local function handleAddonMessage(prefix, payload)
         local parsedX = parsePackedCoord(gx)
         local parsedY = parsePackedCoord(gy)
         if not parsedX or not parsedY then
-            msg("Invalid G payload. Use Gxxxx,yyyyy or Gx.xxxx,y.yyyy")
+            msg("Invalid G payload. Use Gx,y (signed integers or decimals)")
             return
         end
 
-        local currentMapID = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
-        if not currentMapID then
-            msg("Could not resolve current map for G payload.")
-            return
-        end
-
-        applyNavTarget(currentMapID, parsedX, parsedY)
+        local globalMapID = getGlobalMapID()
+        applyNavTarget(globalMapID, parsedX, parsedY)
         return
     end
 
@@ -675,35 +714,35 @@ local function createButton()
     end
 
     local holder = CreateFrame("Frame", "SummonMinMaxButtonHolder", SMM.rootFrame)
-    holder:SetSize(76, 76)
-    holder:SetPoint("TOP", SMM.navFrame, "BOTTOM", -44, -10)
+    holder:SetSize(SMM.ui.buttons.holderSize, SMM.ui.buttons.holderSize)
+    holder:SetPoint("TOP", SMM.navFrame, "BOTTOM", SMM.ui.buttons.summonOffsetX, SMM.ui.buttons.rowOffsetY)
 
     local borderTop = holder:CreateTexture(nil, "ARTWORK")
-    borderTop:SetColorTexture(0.9, 0.85, 0.45, 0.95)
+    borderTop:SetColorTexture(unpack(SMM.ui.buttons.summonBorderColor))
     borderTop:SetPoint("TOPLEFT", 0, 0)
     borderTop:SetPoint("TOPRIGHT", 0, 0)
-    borderTop:SetHeight(8)
+    borderTop:SetHeight(SMM.ui.buttons.borderSize)
 
     local borderBottom = holder:CreateTexture(nil, "ARTWORK")
-    borderBottom:SetColorTexture(0.9, 0.85, 0.45, 0.95)
+    borderBottom:SetColorTexture(unpack(SMM.ui.buttons.summonBorderColor))
     borderBottom:SetPoint("BOTTOMLEFT", 0, 0)
     borderBottom:SetPoint("BOTTOMRIGHT", 0, 0)
-    borderBottom:SetHeight(8)
+    borderBottom:SetHeight(SMM.ui.buttons.borderSize)
 
     local borderLeft = holder:CreateTexture(nil, "ARTWORK")
-    borderLeft:SetColorTexture(0.9, 0.85, 0.45, 0.95)
+    borderLeft:SetColorTexture(unpack(SMM.ui.buttons.summonBorderColor))
     borderLeft:SetPoint("TOPLEFT", 0, 0)
     borderLeft:SetPoint("BOTTOMLEFT", 0, 0)
-    borderLeft:SetWidth(8)
+    borderLeft:SetWidth(SMM.ui.buttons.borderSize)
 
     local borderRight = holder:CreateTexture(nil, "ARTWORK")
-    borderRight:SetColorTexture(0.9, 0.85, 0.45, 0.95)
+    borderRight:SetColorTexture(unpack(SMM.ui.buttons.summonBorderColor))
     borderRight:SetPoint("TOPRIGHT", 0, 0)
     borderRight:SetPoint("BOTTOMRIGHT", 0, 0)
-    borderRight:SetWidth(8)
+    borderRight:SetWidth(SMM.ui.buttons.borderSize)
 
     local button = CreateFrame("Button", "SummonMinMaxButton", holder, "UIPanelButtonTemplate,SecureActionButtonTemplate")
-    button:SetSize(56, 56)
+    button:SetSize(SMM.ui.buttons.buttonSize, SMM.ui.buttons.buttonSize)
     button:SetPoint("CENTER", holder, "CENTER", 0, 0)
     button:RegisterForClicks("AnyUp", "AnyDown")
     button:EnableMouse(true)
@@ -711,7 +750,7 @@ local function createButton()
 
     local icon = button:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints(button)
-    icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
+    icon:SetTexCoord(SMM.ui.buttons.iconCrop, 1 - SMM.ui.buttons.iconCrop, SMM.ui.buttons.iconCrop, 1 - SMM.ui.buttons.iconCrop)
     SMM.buttonIcon = icon
 
     SMM.buttonHolder = holder
@@ -825,8 +864,7 @@ SlashCmdList["SUMMONMINMAXPOS"] = function(msgText)
         end
 
         if not mapID then
-            local currentMapID = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
-            mapID = currentMapID
+            mapID = getGlobalMapID()
         end
 
         if not mapID then
@@ -840,7 +878,7 @@ SlashCmdList["SUMMONMINMAXPOS"] = function(msgText)
 
     if cmd == "help" then
         msg("/smmpos sethere | set <x> <y> [map] | show | hide")
-        msg("Addon msg: MPL payload S<name> / R<name> / P<map>,<x>,<y> / Gxxxx,yyyyy / PSHOW/PHIDE")
+        msg("Addon msg: MPL payload S<name> / R<name> / P<map>,<x>,<y> / Gx,y / PSHOW/PHIDE")
         return
     end
 
